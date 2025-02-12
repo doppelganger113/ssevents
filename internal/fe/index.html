@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>SSE example app</title>
+</head>
+<body>
+<h1>Hello!</h1>
+
+<div id="list"></div>
+
+<script>
+    const evtSource = new EventSource("//localhost:3000/sse", {
+        withCredentials: true,
+    });
+    evtSource.onmessage = (event) => {
+        const newElement = document.createElement("li");
+        const eventList = document.getElementById("list");
+
+        newElement.textContent = `message: ${event.data}`;
+        eventList.appendChild(newElement);
+    };
+    evtSource.addEventListener('heartbeat', () => console.info('Heartbeat!'))
+    console.info("Started listening for SSE...")
+</script>
+</body>
+</html>
