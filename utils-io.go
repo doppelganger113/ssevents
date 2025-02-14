@@ -1,4 +1,4 @@
-package sse
+package sse_server
 
 import (
 	"bufio"

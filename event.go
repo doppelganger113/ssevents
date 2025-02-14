@@ -1,4 +1,4 @@
-package sse
+package sse_server
 
 import (
 	"fmt"
@@ -21,8 +21,25 @@ func NewSSE(event string, data string) Event {
 	return Event{Event: &event, Data: data}
 }
 
-// ToString - converts the SSEEvent into a string that will get sent as a response in the data section
-func (e Event) ToString() (string, error) {
+func (e Event) String() string {
+	builder := strings.Builder{}
+	if e.Id != nil {
+		_, _ = fmt.Fprintf(&builder, "id: %s ", *e.Id)
+	}
+	if e.Event != nil {
+		_, _ = fmt.Fprintf(&builder, "event: %s ", *e.Event)
+	}
+	if e.Retry != nil {
+		_, _ = fmt.Fprintf(&builder, "retry: %d ", *e.Retry)
+	}
+
+	_, _ = fmt.Fprintf(&builder, "data: %s", e.Data)
+
+	return builder.String()
+}
+
+// ToResponseString - converts the SSEEvent into a string that will get sent as a response in the data section
+func (e Event) ToResponseString() (string, error) {
 	builder := strings.Builder{}
 	if e.Event != nil {
 		if _, err := fmt.Fprintf(&builder, "event: %s\n", *e.Event); err != nil {

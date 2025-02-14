@@ -1,4 +1,4 @@
-package util
+package sse_server
 
 import (
 	"fmt"

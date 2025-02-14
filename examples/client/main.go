@@ -3,22 +3,21 @@ package main
 import (
 	"context"
 	"fmt"
-	"github.com/doppelganger113/sse-server/internal/util"
-	"github.com/doppelganger113/sse-server/sse"
+	"github.com/doppelganger113/sse-server"
 	"log"
 	"log/slog"
 )
 
 func main() {
 	sseURL := "http://localhost:3000/sse"
-	c, err := sse.NewSSEClient(sseURL)
+	c, err := sse_server.NewSSEClient(sseURL)
 	defer c.Shutdown()
 	if err != nil {
 		log.Fatalln(err)
 	}
 	c.Start(context.Background())
 
-	sigTerm := util.WatchSigTerm()
+	sigTerm := sse_server.WatchSigTerm()
 
 	slog.Info("client started")
 	// Read from channels
