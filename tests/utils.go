@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-var heartbeatIntervalDefault time.Duration = 50 * time.Millisecond
+var heartbeatIntervalDefault = 20 * time.Second
 
 type Bootstrap struct {
 	Heartbeat time.Duration
@@ -26,19 +26,9 @@ func WithHeartbeatInterval(intervalMillis time.Duration) BootstrapOptions {
 func BootstrapClientAndServer(options ...BootstrapOptions) (
 	*sseserver.Client, *sseserver.Server, func(ctx context.Context) error, error,
 ) {
-	// Configure options
-	var bootstrap Bootstrap
-	for _, option := range options {
-		option(&bootstrap)
-	}
-	if bootstrap.Heartbeat <= 0 {
-		bootstrap.Heartbeat = heartbeatIntervalDefault
-	}
-
 	// Start server
-	server, err := sseserver.New(sseserver.Options{
-		Handlers:          map[string]http.HandlerFunc{},
-		HeartbeatInterval: &bootstrap.Heartbeat,
+	server, err := sseserver.New(&sseserver.Options{
+		Handlers: map[string]http.HandlerFunc{},
 	})
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("failed starting server: %w", err)
@@ -50,7 +40,7 @@ func BootstrapClientAndServer(options ...BootstrapOptions) (
 	}
 
 	// Start client
-	client, err := sseserver.NewSSEClient(url + "/sse")
+	client, err := sseserver.NewSSEClient(url+"/sse", nil)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("failed starting client: %w", err)
 	}

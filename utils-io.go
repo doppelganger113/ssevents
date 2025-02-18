@@ -22,7 +22,11 @@ func ReadEvents(ctx context.Context, reader io.Reader, out chan<- Event) error {
 			line := scanner.Text()
 			if line == "" {
 				if event.Data != "" {
-					out <- event
+					select {
+					case out <- event:
+					case <-ctx.Done():
+						return nil
+					}
 				}
 				event = Event{} // Reset for next event
 				continue

@@ -9,26 +9,20 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
-	"time"
 )
 
-type Options struct {
-	Port              int
-	Handlers          map[string]http.HandlerFunc
-	HeartbeatInterval *time.Duration
-}
-
 type Server struct {
-	url        string
 	httpServer *http.Server
 	sseCtrl    *HttpController
 }
 
-func New(options Options) (*Server, error) {
-	sseCtrl := NewController(&ControllerOptions{HeartbeatInterval: options.HeartbeatInterval})
+func New(options *Options) (*Server, error) {
+	updatedOptions := newUpdatedOptions(options)
+
+	sseCtrl := NewController(updatedOptions)
 	httpServer := &http.Server{
-		Addr:    ":" + strconv.Itoa(options.Port),
-		Handler: createMux(sseCtrl, options.Handlers),
+		Addr:    ":" + strconv.Itoa(updatedOptions.Port),
+		Handler: createMux(sseCtrl, updatedOptions.Handlers),
 	}
 
 	return &Server{httpServer: httpServer, sseCtrl: sseCtrl}, nil

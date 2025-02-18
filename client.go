@@ -6,8 +6,14 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"os"
 	"slices"
+	"sync"
 	"time"
+)
+
+var (
+	ErrToManyFailedReconnects = errors.New("closing client due to too many reconnection attempts")
 )
 
 type Filter func(e Event) bool
@@ -16,117 +22,199 @@ var FilterNoHeartbeat = func(e Event) bool {
 	return e.Event == nil || *e.Event != "heartbeat"
 }
 
+type ClientOptions struct {
+	DropSlowConsumerMsgs bool
+	Logger               *slog.Logger
+}
+
 type Client struct {
+	sync.Mutex
+	logger               *slog.Logger
+	dropSlowConsumerMsgs bool
 	client               *http.Client
 	url                  string
 	closed               bool
 	firstConnEstablished bool
 	firstConnCh          chan struct{}
-	observers            []*observer
-	Event                chan Event
-	Error                chan error
+	observers            []*Observer
+	shutdownCtx          context.Context
+	shutdownFn           context.CancelFunc
+	eventCh              chan Event
+	errorCh              chan error
 }
 
 // NewSSEClient connects to an SSE server and sends events to a channel
-func NewSSEClient(url string) (*Client, error) {
+func NewSSEClient(url string, options *ClientOptions) (*Client, error) {
 	var client = &http.Client{
 		Timeout: 0, // No timeout
 	}
 
+	shutdownCtx, shutdownFn := context.WithCancel(context.Background())
+
+	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	var dropSlowConsumerMsgs bool
+
+	if options != nil {
+		if options.Logger != nil {
+			logger = options.Logger
+		}
+		if options.DropSlowConsumerMsgs {
+			dropSlowConsumerMsgs = true
+		}
+	}
+
 	return &Client{
-		client:      client,
-		url:         url,
-		firstConnCh: make(chan struct{}, 1),
-		Event:       make(chan Event),
-		Error:       make(chan error),
+		dropSlowConsumerMsgs: dropSlowConsumerMsgs,
+		logger:               logger,
+		client:               client,
+		url:                  url,
+		shutdownCtx:          shutdownCtx,
+		shutdownFn:           shutdownFn,
+		firstConnCh:          make(chan struct{}, 1),
+		eventCh:              make(chan Event),
+		errorCh:              make(chan error),
 	}, nil
 }
 
-func (c *Client) removeObserver(index int) {
-	close(c.observers[index].eventCh)
-	c.observers = slices.Delete(c.observers, index, index+1)
+func (c *Client) Events() <-chan Event {
+	return c.eventCh
+}
+
+func (c *Client) Errors() <-chan error {
+	return c.errorCh
+}
+
+func (c *Client) isObserverDone(obs *Observer) bool {
+	// First
+	if obs.closeOnFirst {
+		return true
+	}
+	// Limit
+	if obs.limit > 0 {
+		obs.emittedCount++
+		if obs.emittedCount >= obs.limit {
+			return true
+		}
+	}
+	return false
+}
+
+func (c *Client) emitEventsWait(obs *Observer, evt Event) (isObserverDone, stop bool, err error) {
+	observerTimeoutCtx := context.TODO()
+	var cancel context.CancelFunc
+	if obs.timeout > 0 {
+		observerTimeoutCtx, cancel = context.WithTimeout(context.Background(), obs.timeout)
+		defer cancel()
+	}
+
+	select {
+	case obs.EventCh <- evt:
+		isObserverDone = c.isObserverDone(obs)
+	case <-c.shutdownCtx.Done():
+		stop = true
+		return
+	case <-observerTimeoutCtx.Done():
+		stop = true
+		return
+	}
+
+	return
+}
+
+func (c *Client) emitEventsOrDrop(obs *Observer, evt Event) (isObserverDone, stop bool, err error) {
+	select {
+	case obs.EventCh <- evt:
+		isObserverDone = c.isObserverDone(obs)
+		return
+	case <-c.shutdownCtx.Done():
+		stop = true
+		return
+	default:
+		c.logger.Info("Dropping event due to slow Observer", "evt", evt)
+	}
+
+	return
 }
 
 func (c *Client) fanout() {
-	if c.observers == nil || len(c.observers) == 0 {
+	if len(c.observers) == 0 {
 		return
 	}
 	for {
-		evt, ok := <-c.Event
+		evt, ok := <-c.eventCh
 		if !ok {
 			return
 		}
 
 		// Not going to work fully
-		var rememberWhichToRemove []*observer
+		var obsForRemoval []*Observer
 
 		for i := 0; i < len(c.observers); i++ {
 			if c.observers[i] == nil {
 				continue
 			}
 			if c.observers[i].hasPassedAllFilters(evt) {
+				c.logger.Debug("Consumed", "evt", evt)
+				var stop bool
+				var err error
+				var isObserverDone bool
 
-				select {
-				case c.observers[i].eventCh <- evt:
-					// First
-					if c.observers[i].closeOnFirst {
-						fmt.Println("Added for removal", c.observers[i])
-						rememberWhichToRemove = append(rememberWhichToRemove, c.observers[i])
-						//c.removeObserver(i)
-					}
-					// Limit
-					if c.observers[i].limit > 0 {
-						c.observers[i].emittedCount++
-						if c.observers[i].emittedCount >= c.observers[i].limit {
-							fmt.Println("Added for removal", c.observers[i])
-							//c.removeObserver(i)
-							rememberWhichToRemove = append(rememberWhichToRemove, c.observers[i])
-						}
-					}
+				if c.dropSlowConsumerMsgs {
+					isObserverDone, stop, err = c.emitEventsOrDrop(c.observers[i], evt)
+				} else {
+					isObserverDone, stop, err = c.emitEventsWait(c.observers[i], evt)
+				}
+				if err != nil {
+					return
+				}
+				if stop {
+					return
+				}
+				if isObserverDone {
+					c.logger.Debug("removing completed observer", "obs", c.observers[i])
+					obsForRemoval = append(obsForRemoval, c.observers[i])
 				}
 			}
 		}
 
-		if rememberWhichToRemove != nil {
-			slices.DeleteFunc(c.observers, func(o *observer) bool {
-				if slices.Contains(rememberWhichToRemove, o) {
-					fmt.Printf("Removing observer %+v\n", o)
-					close(o.eventCh)
+		if obsForRemoval != nil {
+			c.observers = slices.DeleteFunc(c.observers, func(o *Observer) bool {
+				if slices.Contains(obsForRemoval, o) {
+					close(o.EventCh)
 					return true
 				}
 				return false
 			})
-			rememberWhichToRemove = nil
+			obsForRemoval = nil
 		}
 	}
 }
 
 // Start - event subscriber is started and blocks until it gets its first message signaling the connection started
-func (c *Client) Start(ctx context.Context) {
+func (c *Client) Start() {
 	// run observers if any for fanout
 	go c.fanout()
 
-	go c.runReconnectionLoop(ctx)
+	go c.runReconnectionLoop(c.shutdownCtx)
 	// wait for first connection
 	<-c.firstConnCh
 }
 
-func (c *Client) close() {
-	fmt.Println("closing client...")
+func (c *Client) Shutdown() {
+	c.logger.Info("client shutting down")
+	c.Lock()
+	defer c.Unlock()
 	if !c.closed {
 		c.closed = true
-		close(c.Event)
-		close(c.Error)
+		c.shutdownFn()
+		close(c.eventCh)
+		close(c.errorCh)
 		for i := 0; i < len(c.observers); i++ {
 			if c.observers[i] != nil {
-				close(c.observers[i].eventCh)
+				close(c.observers[i].EventCh)
 			}
 		}
 	}
-}
-
-func (c *Client) Shutdown() {
-	c.close()
 }
 
 func (c *Client) connectAndListen(ctx context.Context) error {
@@ -160,17 +248,17 @@ func (c *Client) connectAndListen(ctx context.Context) error {
 		c.firstConnCh <- struct{}{}
 	}
 
-	return ReadEvents(ctx, resp.Body, c.Event)
+	return ReadEvents(ctx, resp.Body, c.eventCh)
 }
 
 func (c *Client) runReconnectionLoop(ctx context.Context) {
-	defer c.close()
+	defer c.Shutdown()
 	var retryCounter int
 	var lastTimeConnected time.Time
 
 	for {
 		// If we haven't retried recently
-		if lastTimeConnected.Sub(time.Now()) > 60*time.Second {
+		if time.Since(lastTimeConnected) > 60*time.Second {
 			retryCounter = 0
 		}
 		lastTimeConnected = time.Now()
@@ -178,86 +266,40 @@ func (c *Client) runReconnectionLoop(ctx context.Context) {
 		if err := c.connectAndListen(ctx); err != nil {
 			if !c.closed {
 				select {
-				case c.Error <- err:
+				case c.errorCh <- err:
 				default:
-					slog.Error("dropping error, channel full", "err", err)
+					c.logger.Error("dropping error, channel full", "err", err)
 				}
 			}
 		}
-		fmt.Println("Connection broken")
 		if ctx.Err() != nil {
 			return
 		}
-		fmt.Println("Checking for retry count")
+
 		if retryCounter > 3 {
-			slog.Error("closing client due to too many reconnection attempts")
-			c.close()
+			select {
+			case c.errorCh <- ErrToManyFailedReconnects:
+			default:
+				c.logger.Error("dropping error, channel full", "err", ErrToManyFailedReconnects)
+			}
+			c.Shutdown()
 			return
 		}
 
+		c.logger.Info("reconnecting...")
 		time.Sleep(2 * time.Second)
 		retryCounter++
-		slog.Info("reconnecting")
 	}
 }
 
-func (c *Client) Subscribe(o *observer) <-chan Event {
+func (c *Client) Subscribe(o *Observer) *Observer {
 	if o == nil {
-		panic("unable to add nil observer")
+		panic("unable to add nil Observer")
 	}
 	if c.observers == nil {
-		c.observers = make([]*observer, 0)
+		c.observers = make([]*Observer, 0)
 	}
 	c.observers = append(c.observers, o)
 
-	return o.eventCh
+	return o
 }
-
-//func (c *Client) Filter(filter func(e Event) bool) <-chan Event {
-//	filterCh := make(chan Event)
-//
-//	go func() {
-//		for {
-//			evt, ok := <-c.Event
-//			if !ok {
-//				close(filterCh)
-//				return
-//			}
-//			if filter(evt) {
-//				filterCh <- evt
-//			}
-//		}
-//	}()
-//
-//	return filterCh
-//}
-
-//type bserver struct {
-//	filters []Filter
-//	eventCh chan Event
-//}
-//
-//func (c *Client) AddObserver(filters ...Filter) <-chan Event {
-//	obs := &observer{
-//		eventCh: make(chan Event, 1),
-//		filters: filters,
-//	}
-//	if c.observers == nil {
-//		c.observers = make([]*observer, 1)
-//	}
-//	c.observers = append(c.observers, obs)
-//
-//	return obs.eventCh
-//}
-//
-//func (c *Client) AddObserverOnEvent(event string, filters ...Filter) <-chan Event {
-//	filterByEvent := func(e Event) bool {
-//		return e.Event != nil && *e.Event == event
-//	}
-//	updatedFilters := append(filters, filterByEvent)
-//	return c.AddObserver(updatedFilters...)
-//}
-//
-//func (c *Client) WaitForFirstEvent(filters ...Filter) {
-//
-//}

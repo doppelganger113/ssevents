@@ -20,10 +20,8 @@ func respondError(w http.ResponseWriter, err error) {
 func createMux(sseCtrl *HttpController, routes map[string]http.HandlerFunc) *http.ServeMux {
 	mux := http.NewServeMux()
 
-	if routes != nil {
-		for route, handler := range routes {
-			mux.HandleFunc(route, handler)
-		}
+	for route, handler := range routes {
+		mux.HandleFunc(route, handler)
 	}
 
 	if routes["GET /"] == nil {
@@ -34,7 +32,7 @@ func createMux(sseCtrl *HttpController, routes map[string]http.HandlerFunc) *htt
 	}
 
 	mux.HandleFunc("GET /sse", sseCtrl.Middleware(func(ctx context.Context, req *http.Request, res chan<- Event) {
-		subscribeCh := make(chan Event, 1)
+		subscribeCh := make(chan Event, sseCtrl.options.BufferSize)
 		if sseCtrl.HasSubscriber(req.Context()) {
 			slog.Warn("existing context subscriber should not exist, overriding it")
 		}

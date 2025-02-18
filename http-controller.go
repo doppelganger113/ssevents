@@ -10,25 +10,17 @@ import (
 	"time"
 )
 
-const heartbeatIntervalDefault = 20 * time.Second
-
 type SSEHandler func(ctx context.Context, req *http.Request, res chan<- Event)
 
 type HttpController struct {
-	log               slog.Logger
-	shutdownCtx       context.Context
-	cancel            context.CancelFunc
-	heartbeatInterval time.Duration
-	subscribers       *sync.Map
+	log         slog.Logger
+	shutdownCtx context.Context
+	cancel      context.CancelFunc
+	subscribers *sync.Map
+	options     *Options
 }
 
-type ControllerOptions struct {
-	// HeartbeatInterval represented in millis or default [heartbeatIntervalDefault]
-	HeartbeatInterval *time.Duration
-	Logger            *slog.Logger
-}
-
-func NewController(options *ControllerOptions) *HttpController {
+func NewController(options *Options) *HttpController {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	ctrl := &HttpController{
@@ -36,19 +28,9 @@ func NewController(options *ControllerOptions) *HttpController {
 		cancel:      cancel,
 		log:         *slog.New(slog.NewTextHandler(os.Stdout, nil)),
 		subscribers: &sync.Map{},
+		options:     options,
 	}
 
-	if options != nil {
-		if options.HeartbeatInterval != nil && *options.HeartbeatInterval > 0 {
-			ctrl.heartbeatInterval = *options.HeartbeatInterval
-		}
-		if options.Logger != nil {
-			ctrl.log = *options.Logger
-		}
-	}
-	if ctrl.heartbeatInterval <= 0 {
-		ctrl.heartbeatInterval = heartbeatIntervalDefault
-	}
 	return ctrl
 }
 
@@ -113,20 +95,27 @@ func (c *HttpController) Middleware(handler SSEHandler) http.HandlerFunc {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 
 		c.log.Info("Client connected")
-
-		clientGone := req.Context().Done()
 		rc := http.NewResponseController(w)
 
-		heartbeatTicker := time.NewTicker(c.heartbeatInterval)
+		// On-connect heartbeat
+		stringEvent, err := NewSSE("heartbeat", time.Now().String()).ToResponseString()
+		if err != nil {
+			c.log.Error("failed formatting heartbeat event")
+			return
+		}
+		c.writeAndFlush(rc, w, stringEvent)
+
+		heartbeatTicker := time.NewTicker(c.options.HeartbeatInterval)
 		defer heartbeatTicker.Stop()
 
-		data := make(chan Event)
+		data := make(chan Event, 1)
 		defer close(data)
 
 		handlerCtx, handlerCleanup := context.WithCancel(c.shutdownCtx)
 		defer handlerCleanup()
 		go handler(handlerCtx, req, data)
 
+		clientGone := req.Context().Done()
 		for {
 			select {
 			case <-clientGone:
@@ -136,33 +125,34 @@ func (c *HttpController) Middleware(handler SSEHandler) http.HandlerFunc {
 				c.log.Info("Received shutdown for SSE")
 				return
 			case <-heartbeatTicker.C:
-				stringEvent, err := NewSSE("heartbeat", time.Now().String()).ToResponseString()
-				if err != nil {
-					c.log.Error("failed formatting heartbeat event")
+				stringData, transformErr := NewSSE("heartbeat", time.Now().String()).ToResponseString()
+				if transformErr != nil {
+					c.log.Error("failed formatting heartbeat event", "err", transformErr)
 					return
 				}
-				c.writeAndFlush(rc, w, stringEvent)
+				c.writeAndFlush(rc, w, stringData)
 			case d := <-data:
-				stringEvent, err := d.ToResponseString()
-				if err != nil {
-					c.log.Error("failed formatting event", "event", d)
+				stringData, transformErr := d.ToResponseString()
+				if transformErr != nil {
+					c.log.Error("failed formatting event", "err", transformErr, "event", d)
 					return
 				}
-				c.writeAndFlush(rc, w, stringEvent)
+				c.writeAndFlush(rc, w, stringData)
 			}
 		}
 	}
 }
 
 func (c *HttpController) Emit(e Event) {
-	// TODO: think about avoiding blocking when consumer is slow
-	var counter int
 	c.subscribers.Range(func(_, subChannel any) bool {
-		counter++
-		subChannel.(chan Event) <- e
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+		defer cancel()
+		select {
+		case subChannel.(chan Event) <- e:
+		case <-ctx.Done():
+		}
 		return true
 	})
-	slog.Info(fmt.Sprintf("Emitted: '%+v' to %d subscribers", e, counter))
 }
 
 func (c *HttpController) HasSubscriber(key any) bool {
