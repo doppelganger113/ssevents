@@ -1,5 +1,6 @@
 # Define the name of the binary/output file
-BINARY_NAME := sse_server
+BINARY_NAME := server
+BINARY_CLIENT_NAME := client
 
 # Define the Go module name (replace with your module name)
 MODULE_NAME := github.com/doppelganger113/sse-server
@@ -13,23 +14,35 @@ GO_VERSION := 1.23
 # Define the help target to display available commands
 help:
 	@echo "Available commands:"
-	@echo "  make build       - Build the application"
-	@echo "  make run         - Run the application"
-	@echo "  make test        - Run all tests"
-	@echo "  make lint        - Run linter (golangci-lint)"
-	@echo "  make fmt         - Format the code"
-	@echo "  make clean       - Clean the build artifacts"
-	@echo "  make help        - Show this help message"
+	@echo "  make build       	- Build the server application"
+	@echo "  make build-client  - Build the client application"
+	@echo "  make run         	- Run the application"
+	@echo "  make run-client	- Run the client application"
+	@echo "  make test        	- Run all tests"
+	@echo "  make lint        	- Run linter (golangci-lint)"
+	@echo "  make fmt         	- Format the code"
+	@echo "  make clean       	- Clean the build artifacts"
+	@echo "  make help        	- Show this help message"
 
 # Build the application
 build:
 	@echo "Building $(BINARY_NAME)..."
-	go build -o bin/$(BINARY_NAME) ./cmd/$(BINARY_NAME)
+	go build -o bin/$(BINARY_NAME) ./examples/$(BINARY_NAME)
+
+# Build the client application
+build-client:
+	@echo "Building $(BINARY_CLIENT_NAME)..."
+	go build -o bin/$(BINARY_CLIENT_NAME) ./examples/$(BINARY_CLIENT_NAME)
 
 # Run the application
 run: build
 	@echo "Running $(BINARY_NAME)..."
 	./bin/$(BINARY_NAME)
+
+# Run the application
+run-client: build-client
+	@echo "Running $(BINARY_CLIENT_NAME)..."
+	./bin/$(BINARY_CLIENT_NAME)
 
 # Run all tests
 test:
@@ -67,5 +80,10 @@ ensure-go-version:
 # Run all checks (lint, test, etc.)
 check: ensure-go-version lint test
 
+# Send data to the server to omit to all connected clients
+emit:
+	@echo "Sending hello to the server API..."
+	curl -X POST -H "Content-Type: application/json" -d '{"data": "{\"message\": \"Hello\"}"}' localhost:3000/emit
+
 # Phony targets (targets that are not files)
-.PHONY: help build run test lint fmt clean docker-build docker-run install-deps ensure-go-version check
+.PHONY: help build build-client run run-client test lint fmt clean docker-build docker-run install-deps ensure-go-version check emit

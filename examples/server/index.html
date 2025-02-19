@@ -17,6 +17,11 @@
         const newElement = document.createElement("li");
         const eventList = document.getElementById("list");
 
+        const itemsCount = eventList.getElementsByTagName('li').length;
+        if (itemsCount > 20) {
+            eventList.innerHTML = "";
+        }
+
         newElement.textContent = `message: ${event.data}`;
         eventList.appendChild(newElement);
     };

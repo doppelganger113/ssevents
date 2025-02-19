@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log/slog"
 	"net/http"
 )
 
@@ -27,19 +26,19 @@ func createMux(sseCtrl *HttpController, routes map[string]http.HandlerFunc) *htt
 	if routes["GET /"] == nil {
 		mux.HandleFunc("GET /", func(w http.ResponseWriter, req *http.Request) {
 			// Catch unmapped requests
-			slog.Info(fmt.Sprintf("[Unmapped]: %s - %s", req.Method, req.URL.RawQuery))
+			sseCtrl.log.Info(fmt.Sprintf("[Unmapped]: %s - %s", req.Method, req.URL.RawQuery))
 		})
 	}
 
 	mux.HandleFunc("GET /sse", sseCtrl.Middleware(func(ctx context.Context, req *http.Request, res chan<- Event) {
 		subscribeCh := make(chan Event, sseCtrl.options.BufferSize)
 		if sseCtrl.HasSubscriber(req.Context()) {
-			slog.Warn("existing context subscriber should not exist, overriding it")
+			sseCtrl.log.Warn("existing context subscriber should not exist, overriding it")
 		}
 
 		sseCtrl.Store(req.Context(), subscribeCh)
 		defer func() {
-			slog.Info("Subscriber: cleaning up")
+			sseCtrl.log.Debug("Subscriber: cleaning up")
 			close(subscribeCh)
 			sseCtrl.Delete(req.Context())
 		}()

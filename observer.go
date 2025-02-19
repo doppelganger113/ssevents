@@ -15,7 +15,7 @@ type Observer struct {
 	timeout      time.Duration
 }
 
-func (o *Observer) hasPassedAllFilters(e Event) bool {
+func (o *Observer) hasSatisfiedFilters(e Event) bool {
 	for _, filter := range o.filters {
 		if !filter(e) {
 			return false
@@ -25,6 +25,7 @@ func (o *Observer) hasPassedAllFilters(e Event) bool {
 	return true
 }
 
+// WaitForAll blocks and starts reading from the observer until it has completed, returning all events as a result.
 func (o *Observer) WaitForAll() []Event {
 	var events []Event
 
@@ -35,6 +36,7 @@ func (o *Observer) WaitForAll() []Event {
 	return events
 }
 
+// WaitForAllOrTimeout is identical to the WaitForAll except that it times out after a given duration.
 func (o *Observer) WaitForAllOrTimeout(timeout time.Duration) ([]Event, error) {
 	eventsCh := make(chan []Event)
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"flag"
+	"fmt"
 	"github.com/doppelganger113/sse-server"
 	"log/slog"
 	"net/http"
@@ -17,23 +18,47 @@ import _ "embed"
 //go:embed index.html
 var IndexFile []byte
 
+// flags
 var (
-	port = flag.Int("port", 3000, "port of the server")
+	logLevelFlag = flag.String("log-level", "info", "logging level, types: debug,info,warn,error")
+	port         = flag.Int("port", 3000, "port of the server")
+)
+
+var (
+	logLevel slog.Level
+	log      *slog.Logger
 )
 
 func init() {
 	flag.Parse()
+
+	switch *logLevelFlag {
+	case "debug":
+		logLevel = slog.LevelDebug
+	case "info":
+		logLevel = slog.LevelInfo
+	case "warn":
+		logLevel = slog.LevelWarn
+	case "error":
+		logLevel = slog.LevelError
+	default:
+		slog.Info(fmt.Sprintf("Unknown log level %s defaulting to info", *logLevelFlag))
+		logLevel = slog.LevelInfo
+	}
+	log = slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: logLevel}))
 }
 
 func logErrorAndExit(err error) {
 	if err != nil {
-		slog.Error(err.Error())
+		log.Error(err.Error())
 		os.Exit(1)
 	}
 }
 
 func main() {
 	handlers := make(map[string]http.HandlerFunc)
+
+	// Serve our webpage that will connect via JavaScript to listen for SSE
 	handlers["GET /"] = func(w http.ResponseWriter, req *http.Request) {
 		// Only main path (home)
 		if req.URL.String() == "/" {
@@ -48,7 +73,7 @@ func main() {
 
 	serverErr := make(chan error)
 	go func() {
-		slog.Info("Started server on port :" + strconv.Itoa(*port))
+		log.Info("Started server on port :" + strconv.Itoa(*port))
 		serverErr <- srvr.ListenAndServe()
 	}()
 
@@ -58,7 +83,7 @@ func main() {
 		defer cancel()
 		logErrorAndExit(errors.Join(err, srvr.Shutdown(ctx)))
 	case <-sse_server.WatchSigTerm():
-		slog.Info("shut down signal received")
+		log.Info("shut down signal received")
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
 		logErrorAndExit(srvr.Shutdown(ctx))

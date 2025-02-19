@@ -10,6 +10,8 @@ import (
 	"time"
 )
 
+const eventNameHeartbeat = "heartbeat"
+
 type SSEHandler func(ctx context.Context, req *http.Request, res chan<- Event)
 
 type HttpController struct {
@@ -53,6 +55,20 @@ func (c *HttpController) writeAndFlush(rc *http.ResponseController, w http.Respo
 	}
 }
 
+func newHeartbeatEvent() *Event {
+	return &Event{Data: time.Now().String(), Event: eventNameHeartbeat}
+}
+
+func (c *HttpController) SendResponse(rc *http.ResponseController, w http.ResponseWriter, event *Event) error {
+	stringData, transformErr := event.ToResponseString()
+	if transformErr != nil {
+		return fmt.Errorf("failed formatting heartbeat event: %w", transformErr)
+	}
+
+	c.writeAndFlush(rc, w, stringData)
+	return nil
+}
+
 // Middleware - creates a wrapper for sending SSE to the client with proper cancellation, heartbeat
 // and cleanup functionality already implemented.
 //
@@ -94,16 +110,13 @@ func (c *HttpController) Middleware(handler SSEHandler) http.HandlerFunc {
 		// You may need this locally for CORS requests
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 
-		c.log.Info("Client connected")
+		c.log.Debug("Client connected")
 		rc := http.NewResponseController(w)
 
 		// On-connect heartbeat
-		stringEvent, err := NewSSE("heartbeat", time.Now().String()).ToResponseString()
-		if err != nil {
-			c.log.Error("failed formatting heartbeat event")
-			return
+		if err := c.SendResponse(rc, w, newHeartbeatEvent()); err != nil {
+			c.log.Error("failed sending initial heartbeat", "err", err)
 		}
-		c.writeAndFlush(rc, w, stringEvent)
 
 		heartbeatTicker := time.NewTicker(c.options.HeartbeatInterval)
 		defer heartbeatTicker.Stop()
@@ -119,25 +132,21 @@ func (c *HttpController) Middleware(handler SSEHandler) http.HandlerFunc {
 		for {
 			select {
 			case <-clientGone:
-				c.log.Info("Client disconnected")
+				c.log.Debug("Client disconnected")
 				return
 			case <-c.shutdownCtx.Done():
-				c.log.Info("Received shutdown for SSE")
+				c.log.Debug("shutting down HttpController")
 				return
 			case <-heartbeatTicker.C:
-				stringData, transformErr := NewSSE("heartbeat", time.Now().String()).ToResponseString()
-				if transformErr != nil {
-					c.log.Error("failed formatting heartbeat event", "err", transformErr)
+				if err := c.SendResponse(rc, w, newHeartbeatEvent()); err != nil {
+					c.log.Error("failed sending sse", "err", err)
 					return
 				}
-				c.writeAndFlush(rc, w, stringData)
 			case d := <-data:
-				stringData, transformErr := d.ToResponseString()
-				if transformErr != nil {
-					c.log.Error("failed formatting event", "err", transformErr, "event", d)
+				if err := c.SendResponse(rc, w, &d); err != nil {
+					c.log.Error("failed sending sse", "err", err)
 					return
 				}
-				c.writeAndFlush(rc, w, stringData)
 			}
 		}
 	}

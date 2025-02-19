@@ -6,29 +6,30 @@ import (
 	sseserver "github.com/doppelganger113/sse-server"
 	"log/slog"
 	"net/http"
-	"time"
+	"os"
 )
 
-var heartbeatIntervalDefault = 20 * time.Second
-
-type Bootstrap struct {
-	Heartbeat time.Duration
+type TestBootstrapOptions struct {
+	logger *slog.Logger
 }
 
-type BootstrapOptions func(bootstrap *Bootstrap)
-
-func WithHeartbeatInterval(intervalMillis time.Duration) BootstrapOptions {
-	return func(bootstrap *Bootstrap) {
-		bootstrap.Heartbeat = intervalMillis
-	}
-}
-
-func BootstrapClientAndServer(options ...BootstrapOptions) (
+// BootstrapClientAndServer handles boilerplate set up of server and client for testing environment, by default logs
+// only on errors, override logger for debug and info logs.
+func BootstrapClientAndServer(options *TestBootstrapOptions) (
 	*sseserver.Client, *sseserver.Server, func(ctx context.Context) error, error,
 ) {
+	// Errors only logger
+	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelError}))
+	if options != nil {
+		if options.logger != nil {
+			logger = options.logger
+		}
+	}
+
 	// Start server
 	server, err := sseserver.New(&sseserver.Options{
 		Handlers: map[string]http.HandlerFunc{},
+		Logger:   logger,
 	})
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("failed starting server: %w", err)
@@ -40,13 +41,12 @@ func BootstrapClientAndServer(options ...BootstrapOptions) (
 	}
 
 	// Start client
-	client, err := sseserver.NewSSEClient(url+"/sse", nil)
+	client, err := sseserver.NewSSEClient(url+"/sse", &sseserver.ClientOptions{Logger: logger})
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("failed starting client: %w", err)
 	}
 
 	shutdownFn := func(ctx context.Context) error {
-		slog.Info("Shutting down")
 		client.Shutdown()
 		return server.Shutdown(ctx)
 	}

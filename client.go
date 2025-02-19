@@ -16,10 +16,12 @@ var (
 	ErrToManyFailedReconnects = errors.New("closing client due to too many reconnection attempts")
 )
 
+// Filter is a predicate like function for filtering out events consumed from the client if they should be sent
+// to the observer or not.
 type Filter func(e Event) bool
 
 var FilterNoHeartbeat = func(e Event) bool {
-	return e.Event == nil || *e.Event != "heartbeat"
+	return e.Event != "heartbeat"
 }
 
 type ClientOptions struct {
@@ -76,12 +78,30 @@ func NewSSEClient(url string, options *ClientOptions) (*Client, error) {
 	}, nil
 }
 
+// Events provides raw access to the event received from the server, though for more control you should check out
+// usage of Observer
 func (c *Client) Events() <-chan Event {
 	return c.eventCh
 }
 
+// Errors provides access to the errors channel of the client.
 func (c *Client) Errors() <-chan error {
 	return c.errorCh
+}
+
+// OnError is a convenience function that allows you to react async on an error, like for example logging it.
+// Note that this reads on the error channel of the client, thus reading somewhere on the Errors channel might steal
+// from this consumer as well, so ensure only 1 is used.
+func (c *Client) OnError(handler func(err error)) {
+	go func() {
+		for {
+			err, ok := <-c.errorCh
+			if !ok {
+				return
+			}
+			handler(err)
+		}
+	}()
 }
 
 func (c *Client) isObserverDone(obs *Observer) bool {
@@ -153,7 +173,7 @@ func (c *Client) fanout() {
 			if c.observers[i] == nil {
 				continue
 			}
-			if c.observers[i].hasPassedAllFilters(evt) {
+			if c.observers[i].hasSatisfiedFilters(evt) {
 				c.logger.Debug("Consumed", "evt", evt)
 				var stop bool
 				var err error
@@ -200,6 +220,7 @@ func (c *Client) Start() {
 	<-c.firstConnCh
 }
 
+// Shutdown stops the client and closes all the subscribers
 func (c *Client) Shutdown() {
 	c.logger.Info("client shutting down")
 	c.Lock()
@@ -292,6 +313,7 @@ func (c *Client) runReconnectionLoop(ctx context.Context) {
 	}
 }
 
+// Subscribe adds the observer which will then receive the copy of the event in a fanout manner
 func (c *Client) Subscribe(o *Observer) *Observer {
 	if o == nil {
 		panic("unable to add nil Observer")

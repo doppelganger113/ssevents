@@ -14,6 +14,7 @@ import (
 type Server struct {
 	httpServer *http.Server
 	sseCtrl    *HttpController
+	logger     *slog.Logger
 }
 
 func New(options *Options) (*Server, error) {
@@ -25,9 +26,15 @@ func New(options *Options) (*Server, error) {
 		Handler: createMux(sseCtrl, updatedOptions.Handlers),
 	}
 
-	return &Server{httpServer: httpServer, sseCtrl: sseCtrl}, nil
+	return &Server{
+		httpServer: httpServer,
+		sseCtrl:    sseCtrl,
+		logger:     options.Logger,
+	}, nil
 }
 
+// ListenAndServe starts serving HTTP requests and returns an error on unknown failure. Returns nil error when server
+// is closed or shut down.
 func (s *Server) ListenAndServe() error {
 	if err := s.httpServer.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
 		return err
@@ -36,20 +43,8 @@ func (s *Server) ListenAndServe() error {
 	return nil
 }
 
-// normalizeAddress converts a net.Listener address into a client-accessible URL
-func normalizeAddress(addr string) string {
-	// Check if the address is in the format [::]:port
-	if strings.HasPrefix(addr, "[::]:") {
-		// Replace [::] with localhost (IPv4 and IPv6 compatible)
-		return "http://localhost" + addr[4:]
-	} else if strings.HasPrefix(addr, "0.0.0.0:") {
-		// Replace 0.0.0.0 with localhost
-		return "http://localhost" + addr[7:]
-	}
-	// Assume it's already a valid hostname/IP
-	return "http://" + addr
-}
-
+// ListenAndServeOnRandomPort starts a server on a random available port, but does not block so you can use
+// the url address of the server for connecting your client to. The returned channel is used when the server closes.
 func (s *Server) ListenAndServeOnRandomPort() (string, chan error, error) {
 	errCh := make(chan error)
 
@@ -63,9 +58,10 @@ func (s *Server) ListenAndServeOnRandomPort() (string, chan error, error) {
 
 	go func() {
 		defer func() {
-			slog.Info("Closing random port server")
 			close(errCh)
-			listener.Close()
+			if closerErr := listener.Close(); closerErr != nil {
+				s.logger.Error("failed closing listener", "err", errCh)
+			}
 		}()
 		if err = s.httpServer.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			errCh <- err
@@ -84,6 +80,21 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	)
 }
 
+// Emit sends an event to all TCP connections listening on the sse endpoint
 func (s *Server) Emit(e Event) {
 	s.sseCtrl.Emit(e)
+}
+
+// normalizeAddress converts a net.Listener address into a client-accessible URL
+func normalizeAddress(addr string) string {
+	// Check if the address is in the format [::]:port
+	if strings.HasPrefix(addr, "[::]:") {
+		// Replace [::] with localhost (IPv4 and IPv6 compatible)
+		return "http://localhost" + addr[4:]
+	} else if strings.HasPrefix(addr, "0.0.0.0:") {
+		// Replace 0.0.0.0 with localhost
+		return "http://localhost" + addr[7:]
+	}
+	// Assume it's already a valid hostname/IP
+	return "http://" + addr
 }

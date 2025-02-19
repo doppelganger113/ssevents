@@ -19,14 +19,6 @@ type Options struct {
 	BufferSize int
 }
 
-type OptionsFn func(o *Options)
-
-func WithPort(port int) OptionsFn {
-	return func(o *Options) {
-		o.Port = port
-	}
-}
-
 func newUpdatedOptions(options *Options) *Options {
 	updatedOptions := &Options{
 		Port:              0,
