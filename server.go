@@ -17,13 +17,13 @@ type Server struct {
 	logger     *slog.Logger
 }
 
-func New(options *Options) (*Server, error) {
+func NewServer(options *Options) (*Server, error) {
 	updatedOptions := newUpdatedOptions(options)
 
 	sseCtrl := NewController(updatedOptions)
 	httpServer := &http.Server{
 		Addr:    ":" + strconv.Itoa(updatedOptions.Port),
-		Handler: createMux(sseCtrl, updatedOptions.Handlers),
+		Handler: createMux(sseCtrl, options, updatedOptions.Handlers),
 	}
 
 	return &Server{

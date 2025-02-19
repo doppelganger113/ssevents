@@ -16,8 +16,13 @@ func respondError(w http.ResponseWriter, err error) {
 	}
 }
 
-func createMux(sseCtrl *HttpController, routes map[string]http.HandlerFunc) *http.ServeMux {
+func createMux(sseCtrl *HttpController, options *Options, routes map[string]http.HandlerFunc) *http.ServeMux {
 	mux := http.NewServeMux()
+
+	sseUrl := "/sse"
+	if options.SseUrl != "" {
+		sseUrl = options.SseUrl
+	}
 
 	for route, handler := range routes {
 		mux.HandleFunc(route, handler)
@@ -30,7 +35,7 @@ func createMux(sseCtrl *HttpController, routes map[string]http.HandlerFunc) *htt
 		})
 	}
 
-	mux.HandleFunc("GET /sse", sseCtrl.Middleware(func(ctx context.Context, req *http.Request, res chan<- Event) {
+	mux.HandleFunc("GET "+sseUrl, sseCtrl.Middleware(func(ctx context.Context, req *http.Request, res chan<- Event) {
 		subscribeCh := make(chan Event, sseCtrl.options.BufferSize)
 		if sseCtrl.HasSubscriber(req.Context()) {
 			sseCtrl.log.Warn("existing context subscriber should not exist, overriding it")
@@ -39,20 +44,20 @@ func createMux(sseCtrl *HttpController, routes map[string]http.HandlerFunc) *htt
 		sseCtrl.Store(req.Context(), subscribeCh)
 		defer func() {
 			sseCtrl.log.Debug("Subscriber: cleaning up")
-			close(subscribeCh)
 			sseCtrl.Delete(req.Context())
+			close(subscribeCh)
 		}()
 
 		for {
 			select {
-			case <-ctx.Done():
-				return
 			case data := <-subscribeCh:
 				select {
 				case res <- data:
 				case <-ctx.Done():
 					return
 				}
+			case <-ctx.Done():
+				return
 			}
 		}
 	}))

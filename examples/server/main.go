@@ -66,7 +66,7 @@ func main() {
 		}
 	}
 
-	srvr, err := ssevents.New(&ssevents.Options{Port: *port, Handlers: handlers})
+	srvr, err := ssevents.NewServer(&ssevents.Options{Port: *port, Handlers: handlers})
 	if err != nil {
 		logErrorAndExit(err)
 	}

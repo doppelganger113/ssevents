@@ -27,7 +27,7 @@ func BootstrapClientAndServer(options *TestBootstrapOptions) (
 	}
 
 	// Start server
-	server, err := sseserver.New(&sseserver.Options{
+	server, err := sseserver.NewServer(&sseserver.Options{
 		Handlers: map[string]http.HandlerFunc{},
 		Logger:   logger,
 	})

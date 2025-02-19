@@ -17,6 +17,8 @@ type Options struct {
 	// BufferSize defines how big the channel for each connection is as slow consumers will get their messages dropped.
 	// Default value is 1.
 	BufferSize int
+	// Overrides the default SSE url /sse
+	SseUrl string
 }
 
 func newUpdatedOptions(options *Options) *Options {
@@ -54,6 +56,8 @@ func newUpdatedOptions(options *Options) *Options {
 		}
 
 		updatedOptions.Handlers = options.Handlers
+
+		updatedOptions.SseUrl = options.SseUrl
 	}
 
 	return updatedOptions

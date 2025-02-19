@@ -142,7 +142,10 @@ func (c *HttpController) Middleware(handler SSEHandler) http.HandlerFunc {
 					c.log.Error("failed sending sse", "err", err)
 					return
 				}
-			case d := <-data:
+			case d, ok := <-data:
+				if !ok {
+					return
+				}
 				if err := c.SendResponse(rc, w, &d); err != nil {
 					c.log.Error("failed sending sse", "err", err)
 					return
