@@ -1,4 +1,4 @@
-package sse_server
+package ssevents
 
 type ObserverBuilder struct {
 	filters          []Filter

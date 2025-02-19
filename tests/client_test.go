@@ -5,7 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	sseserver "github.com/doppelganger113/sse-server"
+	"github.com/doppelganger113/ssevents"
 	"sync"
 	"testing"
 	"time"
@@ -28,11 +28,11 @@ func Test_givenMultipleObserver_withLimit_thenConsumeLimitAndComplete(t *testing
 	}()
 
 	const numOfObservers = 3
-	var observers []*sseserver.Observer
+	var observers []*ssevents.Observer
 
 	for i := 0; i < numOfObservers; i++ {
 		obs := client.Subscribe(
-			sseserver.NewObserverBuilder().
+			ssevents.NewObserverBuilder().
 				Limit(4).
 				Build(),
 		)
@@ -41,26 +41,26 @@ func Test_givenMultipleObserver_withLimit_thenConsumeLimitAndComplete(t *testing
 
 	client.Start()
 
-	consumerAllResult := make(chan []sseserver.Event, numOfObservers)
+	consumerAllResult := make(chan []ssevents.Event, numOfObservers)
 
 	var wg sync.WaitGroup
 
 	for i := 0; i < numOfObservers; i++ {
 		wg.Add(1)
-		go func(o *sseserver.Observer) {
+		go func(o *ssevents.Observer) {
 			defer wg.Done()
 			consumerAllResult <- o.WaitForAll()
 		}(observers[i])
 	}
 
 	for i := 0; i < numberOfSentMessages; i++ {
-		server.Emit(sseserver.Event{Data: fmt.Sprintf("Message {%d}", i)})
+		server.Emit(ssevents.Event{Data: fmt.Sprintf("Message {%d}", i)})
 	}
 
 	wg.Wait()
 	close(consumerAllResult)
 
-	var results [][]sseserver.Event
+	var results [][]ssevents.Event
 	for events := range consumerAllResult {
 		results = append(results, events)
 	}
@@ -90,7 +90,7 @@ func Test_givenObserver_whenWaitingForFirstOnly_thenConsumeOneAndComplete(t *tes
 
 	// Reads all non heartbeat events
 	observer := client.Subscribe(
-		sseserver.NewObserverBuilder().
+		ssevents.NewObserverBuilder().
 			First().
 			Build(),
 	)
@@ -106,7 +106,7 @@ func Test_givenObserver_whenWaitingForFirstOnly_thenConsumeOneAndComplete(t *tes
 	}()
 
 	for i := 0; i < numberOfSentMessages; i++ {
-		server.Emit(sseserver.Event{Data: fmt.Sprintf("Message {%d}", i)})
+		server.Emit(ssevents.Event{Data: fmt.Sprintf("Message {%d}", i)})
 	}
 
 	result := <-consumerAllResult
@@ -133,7 +133,7 @@ func Test_givenObserver_whenBufferAndLimit_thenHandleInSameThreadAndComplete(t *
 
 	// Reads all non heartbeat events
 	observer := client.Subscribe(
-		sseserver.NewObserverBuilder().
+		ssevents.NewObserverBuilder().
 			Buffer(5).
 			Limit(5).
 			Build(),
@@ -142,7 +142,7 @@ func Test_givenObserver_whenBufferAndLimit_thenHandleInSameThreadAndComplete(t *
 	client.Start()
 
 	for i := 0; i < numberOfSentMessages; i++ {
-		server.Emit(sseserver.Event{Data: fmt.Sprintf("Message {%d}", i)})
+		server.Emit(ssevents.Event{Data: fmt.Sprintf("Message {%d}", i)})
 	}
 
 	result := observer.WaitForAll()
@@ -170,7 +170,7 @@ func Test_givenObserverNoBuffer_whenNotAllEventsArrive_thenBlockChannelReading(t
 	}()
 
 	observer := client.Subscribe(
-		sseserver.NewObserverBuilder().
+		ssevents.NewObserverBuilder().
 			Buffer(0).
 			Limit(5).
 			Build(),
@@ -178,13 +178,13 @@ func Test_givenObserverNoBuffer_whenNotAllEventsArrive_thenBlockChannelReading(t
 
 	client.Start()
 
-	resultCh := make(chan []sseserver.Event)
+	resultCh := make(chan []ssevents.Event)
 	go func() {
 		resultCh <- observer.WaitForAll()
 	}()
 
 	for i := 0; i < numberOfSentMessages; i++ {
-		server.Emit(sseserver.Event{Data: fmt.Sprintf("Message {%d}", i)})
+		server.Emit(ssevents.Event{Data: fmt.Sprintf("Message {%d}", i)})
 	}
 
 	timeoutCtx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
@@ -218,7 +218,7 @@ func Test_givenObserverNoBuffer_whenNotAllEventsArriveAndHasTimeout_thenTimeout(
 	}()
 
 	observer := client.Subscribe(
-		sseserver.NewObserverBuilder().
+		ssevents.NewObserverBuilder().
 			Buffer(0).
 			Limit(5).
 			Build(),
@@ -233,7 +233,7 @@ func Test_givenObserverNoBuffer_whenNotAllEventsArriveAndHasTimeout_thenTimeout(
 	}()
 
 	for i := 0; i < numberOfSentMessages; i++ {
-		server.Emit(sseserver.Event{Data: fmt.Sprintf("Message {%d}", i)})
+		server.Emit(ssevents.Event{Data: fmt.Sprintf("Message {%d}", i)})
 	}
 
 	timeoutCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -267,7 +267,7 @@ func Test_givenObserverNoBuffer_whenOnEvents_thenReturnSpecifiedEventTypesOnly(t
 	}()
 
 	observer := client.Subscribe(
-		sseserver.NewObserverBuilder().
+		ssevents.NewObserverBuilder().
 			On("Custom").
 			Buffer(0).
 			Limit(2).
@@ -277,7 +277,7 @@ func Test_givenObserverNoBuffer_whenOnEvents_thenReturnSpecifiedEventTypesOnly(t
 	client.Start()
 
 	type result struct {
-		events []sseserver.Event
+		events []ssevents.Event
 		err    error
 	}
 
@@ -291,7 +291,7 @@ func Test_givenObserverNoBuffer_whenOnEvents_thenReturnSpecifiedEventTypesOnly(t
 	}()
 
 	for i := 0; i < numberOfSentMessages; i++ {
-		evt := sseserver.Event{Data: fmt.Sprintf("Message {%d}", i)}
+		evt := ssevents.Event{Data: fmt.Sprintf("Message {%d}", i)}
 		if i > 2 {
 			evt.Event = "Custom"
 		}

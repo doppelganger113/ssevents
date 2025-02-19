@@ -3,7 +3,7 @@ BINARY_NAME := server
 BINARY_CLIENT_NAME := client
 
 # Define the Go module name (replace with your module name)
-MODULE_NAME := github.com/doppelganger113/sse-server
+MODULE_NAME := github.com/doppelganger113/ssevents
 
 # Define the Go version to use (optional)
 GO_VERSION := 1.23

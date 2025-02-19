@@ -5,7 +5,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"github.com/doppelganger113/sse-server"
+	"github.com/doppelganger113/ssevents"
 	"log/slog"
 	"net/http"
 	"os"
@@ -66,7 +66,7 @@ func main() {
 		}
 	}
 
-	srvr, err := sse_server.New(&sse_server.Options{Port: *port, Handlers: handlers})
+	srvr, err := ssevents.New(&ssevents.Options{Port: *port, Handlers: handlers})
 	if err != nil {
 		logErrorAndExit(err)
 	}
@@ -82,7 +82,7 @@ func main() {
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
 		logErrorAndExit(errors.Join(err, srvr.Shutdown(ctx)))
-	case <-sse_server.WatchSigTerm():
+	case <-ssevents.WatchSigTerm():
 		log.Info("shut down signal received")
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()

@@ -3,7 +3,7 @@ package tests
 import (
 	"context"
 	"fmt"
-	sseserver "github.com/doppelganger113/sse-server"
+	sseserver "github.com/doppelganger113/ssevents"
 	"log/slog"
 	"net/http"
 	"os"

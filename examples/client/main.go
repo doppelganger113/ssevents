@@ -3,7 +3,7 @@ package main
 import (
 	"flag"
 	"fmt"
-	"github.com/doppelganger113/sse-server"
+	"github.com/doppelganger113/ssevents"
 	"log/slog"
 	"os"
 )
@@ -39,7 +39,7 @@ func init() {
 
 func main() {
 	sseURL := "http://localhost:3000/sse"
-	c, err := sse_server.NewSSEClient(sseURL, nil)
+	c, err := ssevents.NewSSEClient(sseURL, nil)
 	if err != nil {
 		log.Error("failed creating sse client", "err", err)
 		os.Exit(1)
@@ -48,7 +48,7 @@ func main() {
 
 	c.Start()
 
-	sigTerm := sse_server.WatchSigTerm()
+	sigTerm := ssevents.WatchSigTerm()
 
 	log.Info("client started")
 	// Read from channels

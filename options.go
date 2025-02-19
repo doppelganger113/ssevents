@@ -1,4 +1,4 @@
-package sse_server
+package ssevents
 
 import (
 	"log/slog"

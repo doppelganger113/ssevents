@@ -1,4 +1,4 @@
-package sse_server
+package ssevents
 
 import (
 	"context"
@@ -226,10 +226,12 @@ func (c *Client) Shutdown() {
 	c.Lock()
 	defer c.Unlock()
 	if !c.closed {
+		c.logger.Info("Not closed, closing...")
 		c.closed = true
 		c.shutdownFn()
 		close(c.eventCh)
 		close(c.errorCh)
+		c.logger.Info("closing observers")
 		for i := 0; i < len(c.observers); i++ {
 			if c.observers[i] != nil {
 				close(c.observers[i].EventCh)
