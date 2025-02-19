@@ -1,4 +1,4 @@
-package sse
+package ssevents
 
 import (
 	"bufio"
@@ -22,7 +22,11 @@ func ReadEvents(ctx context.Context, reader io.Reader, out chan<- Event) error {
 			line := scanner.Text()
 			if line == "" {
 				if event.Data != "" {
-					out <- event
+					select {
+					case out <- event:
+					case <-ctx.Done():
+						return nil
+					}
 				}
 				event = Event{} // Reset for next event
 				continue
@@ -30,10 +34,10 @@ func ReadEvents(ctx context.Context, reader io.Reader, out chan<- Event) error {
 
 			if strings.HasPrefix(line, "id: ") {
 				id := strings.TrimPrefix(line, "id: ")
-				event.Id = &id
+				event.Id = id
 			} else if strings.HasPrefix(line, "event: ") {
 				evt := strings.TrimPrefix(line, "event: ")
-				event.Event = &evt
+				event.Event = evt
 			} else if strings.HasPrefix(line, "data: ") {
 				event.Data += strings.TrimPrefix(line, "data: ")
 			}

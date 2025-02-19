@@ -1,4 +1,4 @@
-package sse
+package ssevents
 
 import (
 	"context"
@@ -6,24 +6,20 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"sync"
 	"time"
 )
 
-const heartbeatIntervalDefault = 20 * time.Second
+const eventNameHeartbeat = "heartbeat"
 
-type Handler func(ctx context.Context, req *http.Request, res chan<- Event)
+type SSEHandler func(ctx context.Context, req *http.Request, res chan<- Event)
 
 type HttpController struct {
-	log               slog.Logger
-	shutdownCtx       context.Context
-	cancel            context.CancelFunc
-	heartbeatInterval time.Duration
-}
-
-type Options struct {
-	// HeartbeatInterval represented in millis or default [heartbeatIntervalDefault]
-	HeartbeatInterval time.Duration
-	Logger            *slog.Logger
+	log         slog.Logger
+	shutdownCtx context.Context
+	cancel      context.CancelFunc
+	subscribers *sync.Map
+	options     *Options
 }
 
 func NewController(options *Options) *HttpController {
@@ -33,19 +29,10 @@ func NewController(options *Options) *HttpController {
 		shutdownCtx: ctx,
 		cancel:      cancel,
 		log:         *slog.New(slog.NewTextHandler(os.Stdout, nil)),
+		subscribers: &sync.Map{},
+		options:     options,
 	}
 
-	if options != nil {
-		if options.HeartbeatInterval > 0 {
-			ctrl.heartbeatInterval = options.HeartbeatInterval
-		}
-		if options.Logger != nil {
-			ctrl.log = *options.Logger
-		}
-	}
-	if ctrl.heartbeatInterval <= 0 {
-		ctrl.heartbeatInterval = heartbeatIntervalDefault
-	}
 	return ctrl
 }
 
@@ -66,6 +53,20 @@ func (c *HttpController) writeAndFlush(rc *http.ResponseController, w http.Respo
 		c.log.Error("failed flushing the SSE", "err", err)
 		return
 	}
+}
+
+func newHeartbeatEvent() *Event {
+	return &Event{Data: time.Now().String(), Event: eventNameHeartbeat}
+}
+
+func (c *HttpController) SendResponse(rc *http.ResponseController, w http.ResponseWriter, event *Event) error {
+	stringData, transformErr := event.ToResponseString()
+	if transformErr != nil {
+		return fmt.Errorf("failed formatting heartbeat event: %w", transformErr)
+	}
+
+	c.writeAndFlush(rc, w, stringData)
+	return nil
 }
 
 // Middleware - creates a wrapper for sending SSE to the client with proper cancellation, heartbeat
@@ -98,7 +99,7 @@ func (c *HttpController) writeAndFlush(rc *http.ResponseController, w http.Respo
 //	       slog.Info("Sent data to client")
 //	   }
 //	 }
-func (c *HttpController) Middleware(handler Handler) http.HandlerFunc {
+func (c *HttpController) Middleware(handler SSEHandler) http.HandlerFunc {
 	return func(w http.ResponseWriter, req *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.Header().Set("Cache-Control", "no-cache")
@@ -109,44 +110,72 @@ func (c *HttpController) Middleware(handler Handler) http.HandlerFunc {
 		// You may need this locally for CORS requests
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 
-		c.log.Info("Client connected")
-
-		clientGone := req.Context().Done()
+		c.log.Debug("Client connected")
 		rc := http.NewResponseController(w)
 
-		heartbeatTicker := time.NewTicker(c.heartbeatInterval)
+		// On-connect heartbeat
+		if err := c.SendResponse(rc, w, newHeartbeatEvent()); err != nil {
+			c.log.Error("failed sending initial heartbeat", "err", err)
+		}
+
+		heartbeatTicker := time.NewTicker(c.options.HeartbeatInterval)
 		defer heartbeatTicker.Stop()
 
-		data := make(chan Event)
+		data := make(chan Event, 1)
 		defer close(data)
 
 		handlerCtx, handlerCleanup := context.WithCancel(c.shutdownCtx)
 		defer handlerCleanup()
 		go handler(handlerCtx, req, data)
 
+		clientGone := req.Context().Done()
 		for {
 			select {
 			case <-clientGone:
-				c.log.Info("Client disconnected")
+				c.log.Debug("Client disconnected")
 				return
 			case <-c.shutdownCtx.Done():
-				c.log.Info("Received shutdown for SSE")
+				c.log.Debug("shutting down HttpController")
 				return
 			case <-heartbeatTicker.C:
-				stringEvent, err := NewSSE("heartbeat", time.Now().String()).ToString()
-				if err != nil {
-					c.log.Error("failed formatting heartbeat event")
+				if err := c.SendResponse(rc, w, newHeartbeatEvent()); err != nil {
+					c.log.Error("failed sending sse", "err", err)
 					return
 				}
-				c.writeAndFlush(rc, w, stringEvent)
-			case d := <-data:
-				stringEvent, err := d.ToString()
-				if err != nil {
-					c.log.Error("failed formatting event", "event", d)
+			case d, ok := <-data:
+				if !ok {
 					return
 				}
-				c.writeAndFlush(rc, w, stringEvent)
+				if err := c.SendResponse(rc, w, &d); err != nil {
+					c.log.Error("failed sending sse", "err", err)
+					return
+				}
 			}
 		}
 	}
+}
+
+func (c *HttpController) Emit(e Event) {
+	c.subscribers.Range(func(_, subChannel any) bool {
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+		defer cancel()
+		select {
+		case subChannel.(chan Event) <- e:
+		case <-ctx.Done():
+		}
+		return true
+	})
+}
+
+func (c *HttpController) HasSubscriber(key any) bool {
+	_, ok := c.subscribers.Load(key)
+	return ok
+}
+
+func (c *HttpController) Store(key any, subCh chan Event) {
+	c.subscribers.Store(key, subCh)
+}
+
+func (c *HttpController) Delete(key any) {
+	c.subscribers.Delete(key)
 }
