@@ -2,6 +2,10 @@
 BINARY_NAME := server
 BINARY_CLIENT_NAME := client
 
+# Setup Go tools
+TOOLS_DIR := $(shell go env GOPATH)/bin
+STRINGER := $(TOOLS_DIR)/stringer
+
 # Define the Go module name (replace with your module name)
 MODULE_NAME := github.com/doppelganger113/ssevents
 
@@ -25,7 +29,7 @@ help:
 	@echo "  make help        	- Show this help message"
 
 # Build the application
-build:
+build: generate
 	@echo "Building $(BINARY_NAME)..."
 	go build -o bin/$(BINARY_NAME) ./examples/$(BINARY_NAME)
 
@@ -37,12 +41,12 @@ build-client:
 # Run the application
 run: build
 	@echo "Running $(BINARY_NAME)..."
-	./bin/$(BINARY_NAME)
+	./bin/$(BINARY_NAME) $(ARGS)
 
 # Run the application
 run-client: build-client
 	@echo "Running $(BINARY_CLIENT_NAME)..."
-	./bin/$(BINARY_CLIENT_NAME)
+	./bin/$(BINARY_CLIENT_NAME) $(ARGS)
 
 # Run all tests
 test:
@@ -80,10 +84,19 @@ ensure-go-version:
 # Run all checks (lint, test, etc.)
 check: ensure-go-version lint test
 
+tools: $(STRINGER)
+
+$(STRINGER):
+	go install golang.org/x/tools/cmd/stringer@latest
+
+# Execute all tools like stringer to generate code
+generate: tools
+	go generate ./...
+
 # Send data to the server to omit to all connected clients
 emit:
 	@echo "Sending hello to the server API..."
 	curl -X POST -H "Content-Type: application/json" -d '{"data": "{\"message\": \"Hello\"}"}' localhost:3000/emit
 
 # Phony targets (targets that are not files)
-.PHONY: help build build-client run run-client test lint fmt clean docker-build docker-run install-deps ensure-go-version check emit
+.PHONY: help build build-client run run-client test lint fmt clean docker-build docker-run install-deps ensure-go-version check emit tools generate

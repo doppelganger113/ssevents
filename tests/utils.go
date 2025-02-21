@@ -3,7 +3,7 @@ package tests
 import (
 	"context"
 	"fmt"
-	sseserver "github.com/doppelganger113/ssevents"
+	"github.com/doppelganger113/ssevents"
 	"log/slog"
 	"net/http"
 	"os"
@@ -16,7 +16,7 @@ type TestBootstrapOptions struct {
 // BootstrapClientAndServer handles boilerplate set up of server and client for testing environment, by default logs
 // only on errors, override logger for debug and info logs.
 func BootstrapClientAndServer(options *TestBootstrapOptions) (
-	*sseserver.Client, *sseserver.Server, func(ctx context.Context) error, error,
+	*ssevents.Client, *ssevents.Server, func(ctx context.Context) error, error,
 ) {
 	// Errors only logger
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelError}))
@@ -27,7 +27,7 @@ func BootstrapClientAndServer(options *TestBootstrapOptions) (
 	}
 
 	// Start server
-	server, err := sseserver.NewServer(&sseserver.Options{
+	server, err := ssevents.NewServer(&ssevents.Options{
 		Handlers: map[string]http.HandlerFunc{},
 		Logger:   logger,
 	})
@@ -41,7 +41,7 @@ func BootstrapClientAndServer(options *TestBootstrapOptions) (
 	}
 
 	// Start client
-	client, err := sseserver.NewSSEClient(url+"/sse", &sseserver.ClientOptions{Logger: logger})
+	client, err := ssevents.NewSSEClient(url+"/sse", &ssevents.ClientOptions{Logger: logger})
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("failed starting client: %w", err)
 	}

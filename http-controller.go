@@ -5,21 +5,30 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
-	"os"
 	"sync"
 	"time"
 )
 
 const eventNameHeartbeat = "heartbeat"
 
+//go:generate stringer -type=EmitStrategy
+type EmitStrategy int
+
+const (
+	EmitStrategyBlock EmitStrategy = iota
+	EmitStrategyDrop
+	EmitStrategyTimeout
+)
+
 type SSEHandler func(ctx context.Context, req *http.Request, res chan<- Event)
 
 type HttpController struct {
-	log         slog.Logger
+	log         *slog.Logger
 	shutdownCtx context.Context
 	cancel      context.CancelFunc
 	subscribers *sync.Map
 	options     *Options
+	emissionFn  func(e Event) func(key, value any) bool
 }
 
 func NewController(options *Options) *HttpController {
@@ -28,10 +37,13 @@ func NewController(options *Options) *HttpController {
 	ctrl := &HttpController{
 		shutdownCtx: ctx,
 		cancel:      cancel,
-		log:         *slog.New(slog.NewTextHandler(os.Stdout, nil)),
+		log:         options.Logger,
 		subscribers: &sync.Map{},
 		options:     options,
+		emissionFn:  createEmitHandlerBasedOnStrategy(options.EmitStrategy, options.Logger),
 	}
+
+	options.Logger.Debug("using emissions strategy", "strategy", options.EmitStrategy)
 
 	return ctrl
 }
@@ -39,6 +51,44 @@ func NewController(options *Options) *HttpController {
 func (c *HttpController) Shutdown() error {
 	c.cancel()
 	return nil
+}
+
+func createEmitHandlerBasedOnStrategy(strategy EmitStrategy, logger *slog.Logger) func(e Event) func(key, value any) bool {
+	switch strategy {
+	case EmitStrategyBlock:
+		return func(e Event) func(key any, value any) bool {
+			return func(_, subChannel any) bool {
+				subChannel.(chan Event) <- e
+				return true
+			}
+		}
+	case EmitStrategyDrop:
+		return func(e Event) func(key any, value any) bool {
+			return func(_, subChannel any) bool {
+				select {
+				case subChannel.(chan Event) <- e:
+				default:
+					logger.Debug("dropping event due to slow consumer", "evt", e)
+				}
+				return true
+			}
+		}
+	case EmitStrategyTimeout:
+		return func(e Event) func(key any, value any) bool {
+			return func(_, subChannel any) bool {
+				ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+				defer cancel()
+				select {
+				case subChannel.(chan Event) <- e:
+				case <-ctx.Done():
+					logger.Debug("dropping event due to timeout on slow consumer", "evt", e)
+				}
+				return true
+			}
+		}
+	default:
+		panic("using unknown emit strategy")
+	}
 }
 
 func (c *HttpController) writeAndFlush(rc *http.ResponseController, w http.ResponseWriter, data string) {
@@ -86,18 +136,18 @@ func (c *HttpController) SendResponse(rc *http.ResponseController, w http.Respon
 //		   slog.Info("cleaning up subscribers")
 //		 }()
 //
-//	 for {
-//	   select {
-//	     case <-handlerCtx.Done():
-//	       return
-//	     case data := <-subscribeCh:
-//	       select {
-//	         case res <- data:
-//	         case <-handlerCtx.Done():
-//	           return
-//	       }
-//	       slog.Info("Sent data to client")
-//	   }
+//		for {
+//			select {
+//			case data := <-subscribeCh:
+//				select {
+//				case res <- data:
+//				case <-ctx.Done():
+//					return
+//				}
+//			case <-ctx.Done():
+//				return
+//			}
+//		}
 //	 }
 func (c *HttpController) Middleware(handler SSEHandler) http.HandlerFunc {
 	return func(w http.ResponseWriter, req *http.Request) {
@@ -155,16 +205,11 @@ func (c *HttpController) Middleware(handler SSEHandler) http.HandlerFunc {
 	}
 }
 
+// Emit strategies: no-buffer (block) , buffer (block), buffer (drop)
+
 func (c *HttpController) Emit(e Event) {
-	c.subscribers.Range(func(_, subChannel any) bool {
-		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
-		defer cancel()
-		select {
-		case subChannel.(chan Event) <- e:
-		case <-ctx.Done():
-		}
-		return true
-	})
+	c.log.Debug("emitting event", "event", e)
+	c.subscribers.Range(c.emissionFn(e))
 }
 
 func (c *HttpController) HasSubscriber(key any) bool {

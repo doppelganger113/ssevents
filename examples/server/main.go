@@ -45,6 +45,7 @@ func init() {
 		slog.Info(fmt.Sprintf("Unknown log level %s defaulting to info", *logLevelFlag))
 		logLevel = slog.LevelInfo
 	}
+	fmt.Println("using log level " + strconv.Itoa(int(logLevel)))
 	log = slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: logLevel}))
 }
 
@@ -66,7 +67,7 @@ func main() {
 		}
 	}
 
-	srvr, err := ssevents.NewServer(&ssevents.Options{Port: *port, Handlers: handlers})
+	srvr, err := ssevents.NewServer(&ssevents.Options{Port: *port, Handlers: handlers, Logger: log})
 	if err != nil {
 		logErrorAndExit(err)
 	}
