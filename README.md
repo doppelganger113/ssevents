@@ -1,55 +1,76 @@
 # SSE server and client
 
-Example of implementing a **Server Sent Events (SSE)** server and client in Go. You can send messages to the server
-that will get omitted to the connected clients where the clients are either a Go app or the browser.
+Example implementation of **Server Sent Events (SSE)** server and client in **Go**. Useful for usage in tests where you
+want to spin up a real SSE server to emit events to.
 
-## Getting started
+![Tests](https://github.com/doppelganger113/ssevents/actions/workflows/check.yaml/badge.svg)
+![Lint](https://github.com/doppelganger113/ssevents/actions/workflows/golangci-lint.yaml/badge.svg)
 
-**Note!**
-Safari users might experience basic html output via stream to not show properly due to internal buffering that is done
-so in those cases please use another browser.
+## Quick start
 
-**Requirements:**
-- Go
+This library has 2 example implementation of a server and a client, server will have a webpage that will append messages
+as it receives them and the client will output them to a console.
 
-When running the applications, especially the server, you will get debug insights that will help you see what's 
-happening.
-
-Run server
-```bash
-go run cmd/server/main.go
-```
-
-Run client
-```bash
-go run cmd/client/main.go
-```
-Or open browser on `localhost:3000`
-
-## Sending events
-
-There is a timer functionality endpoint on `localhost:3000/sse/timer` that just emits a message every 1 second to that
-webpage.
-
-For sending events to all connected subscribers you can either execute in your browser the following endpoint:
-`localhost:3000/emit?data=123` or execute a curl request:
-```bash
-curl "localhost:3000/emit/?data=123"
-```
-You can also use the POST version of that endpoint to send 
-
-- Plain text
+1. Run server (accessed on `localhost:3000`)
     ```bash
-    curl -d 'plain text' -X POST localhost:3000/emit
+    make run
     ```
-- JSON of the whole Event object
+2. Run client
     ```bash
-    curl -H 'Content-Type: application/json' \
-      -d '{ "id":"foo","data":"{\"name\":\"John\", \"age\": 20}", "event": "priority"}' \
-      -X POST \
-      localhost:3000/emit
+    make run-client
     ```
-The **event** object has the following structure where all fields are optional except the data field
+3. Emit an event (sends a curl request)
+    ```bash
+    make emit
+    #    Sending hello to the server API...
+    #    curl -X POST -H "Content-Type: application/json" -d '{"data": "{\"message\": \"Hello\"}"}' localhost:3000/emit
+    ```
+
+> Note: you can pass args like so: `make run ARGS="--log-level debug"`
+
+And on the client for example you will see the received event:
+```bash
+time=2025-02-19T14:39:46.364+01:00 level=INFO msg="received an event" event="data: {\"message\": \"Hello\"}"
+```
+
+You can see both [server example](examples/server/main.go) and [client example](examples/client/main.go) on how to
+run both in Go programmatically.
+
+Options for configuring the server are:
+```go
+type Options struct {
+	// Port defines the port on which to run the server
+	Port int
+	// Handlers are used for adding new endpoints
+	Handlers map[string]http.HandlerFunc
+	// HeartbeatInterval defines on which interval a heartbeat is sent to connected clients
+	HeartbeatInterval time.Duration
+	// Logger to be used, default is stdout text
+	Logger *slog.Logger
+	// Overrides the default SSE url /sse
+	SseUrl string
+	// EmitStrategy option defines what to do on slow consumers as they can block/slow emission to others,
+	// default is EmitStrategyBlock.
+	EmitStrategy EmitStrategy
+	// BufferSize defines how big the channel for each connection is as slow consumers will get their messages dropped.
+	// Default value is 1 and is used in conjunction with EmitStrategy when buffering is set.
+	BufferSize int
+}
+```
+
+Table of contents
+=================
+
+<!--ts-->
+* [Event structure](#event-structure)
+* [Test usage](#test-usage)
+* [FAQ](#faq)
+<!--te-->
+
+## Event structure
+
+The **event** object (that was sent above) has the following structure where _all fields are optional_ except the 
+**data** field
 ```json
 {
   "id": "123ab",
@@ -58,28 +79,104 @@ The **event** object has the following structure where all fields are optional e
   "retry": 10
 }
 ```
+but don't forget that this json is converted to a string when being assigned to field **data**.
 
-## Custom SSE handler
+## Test usage
 
-You can utilize the `sse.HttpController` `Middleware` function that wraps the handling of establishing and closing
-the stream properly. Only important thing is that you need to watch for the context closing so that everything is 
-shut down properly.
+A utility function that you can use in tests to easily start and server and client that are connected is through the
+use of `BootstrapClientAndServer` and the `Observers` that give more control when subscribing to events.
 
-Example implementation of the timer using the wrapper
 ```go
-mux.HandleFunc("GET /sse/timer", sseCtrl.Middleware(func(ctx context.Context, req *http.Request, res chan<- sse.Event) {
-    t := time.NewTicker(time.Second)
-    defer t.Stop()
-
-    for {
-        select {
-        case <-t.C:
-            res <- sse.Event{Data: "Hello!"}
-        case <-ctx.Done():
-            return
-        }
+client, server, shutdown, err := tests.BootstrapClientAndServer(nil)
+if err != nil {
+    t.Error(err)
+}
+defer func() {
+    if shutdownErr := shutdown(ctx); shutdownErr != nil {
+        t.Error(shutdownErr)
     }
-}))
+}()
+
+client.Start()
 ```
-Don't forget to clean up the resources in the handler like the _ticker_ above, channel closing will happen in the 
-wrapper, so don't worry about that.
+Once the `client.Start()` is invoked, it will connect and start consuming messages emitted from the server.
+
+```go
+import (
+	"context"
+	"errors"
+	"fmt"
+	"github.com/doppelganger113/ssevents"
+	"sync"
+	"testing"
+	"time"
+)
+
+
+func Test_givenMultipleObserver_withLimit_thenConsumeLimitAndComplete(t *testing.T) {
+	const numberOfSentMessages = 5
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	client, server, shutdown, err := tests.BootstrapClientAndServer(nil)
+	if err != nil {
+		t.Error(err)
+	}
+	defer func() {
+		if shutdownErr := shutdown(ctx); shutdownErr != nil {
+			t.Error(shutdownErr)
+		}
+	}()
+
+	const numOfObservers = 3
+	var observers []*ssevents.Observer
+
+	for i := 0; i < numOfObservers; i++ {
+		obs := client.Subscribe(
+			ssevents.NewObserverBuilder().
+				Limit(4).
+				Build(),
+		)
+		observers = append(observers, obs)
+	}
+
+	client.Start()
+
+	consumerAllResult := make(chan []ssevents.Event, numOfObservers)
+
+	var wg sync.WaitGroup
+
+	for i := 0; i < numOfObservers; i++ {
+		wg.Add(1)
+		go func(o *ssevents.Observer) {
+			defer wg.Done()
+			consumerAllResult <- o.WaitForAll()
+		}(observers[i])
+	}
+
+	for i := 0; i < numberOfSentMessages; i++ {
+		server.Emit(ssevents.Event{Data: fmt.Sprintf("Message {%d}", i)})
+	}
+
+	wg.Wait()
+	close(consumerAllResult)
+
+	var results [][]ssevents.Event
+	for events := range consumerAllResult {
+		results = append(results, events)
+	}
+
+	for _, result := range results {
+		if 4 != len(result) {
+			t.Errorf("failed basic observer, expected %d got %d events", numberOfSentMessages, len(result))
+		}
+	}
+}
+```
+
+
+## FAQ
+
+- **Safari users** might experience basic html output via stream to not show properly due to internal buffering that is done
+so in those cases please use another browser.

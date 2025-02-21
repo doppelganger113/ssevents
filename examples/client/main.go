@@ -39,7 +39,7 @@ func init() {
 
 func main() {
 	sseURL := "http://localhost:3000/sse"
-	c, err := ssevents.NewSSEClient(sseURL, nil)
+	c, err := ssevents.NewSSEClient(sseURL, &ssevents.ClientOptions{Logger: log})
 	if err != nil {
 		log.Error("failed creating sse client", "err", err)
 		os.Exit(1)
